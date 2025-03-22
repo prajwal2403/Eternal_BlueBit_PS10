@@ -17,6 +17,11 @@ import os
 import base64
 import uuid
 import yagmail 
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
 
 # Generate a secure secret key
 def generate_secret_key():
@@ -50,8 +55,7 @@ MONGO_DETAILS = "mongodb+srv://prajwal2403:Mysql321@prajwal2403.s8a1j.mongodb.ne
 client = AsyncIOMotorClient(MONGO_DETAILS)
 database = client.story
 users_collection = database.get_collection("users")
-patients_collection = database.get_collection("patients")
-stories_collection = database.get_collection("stories")  # Add this line
+stories_collection = database.get_collection("stories")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -64,13 +68,14 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 # OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-# Google OAuth2 configuration
+# === Google OAuth2 configuration with environment variables ===
 config_data = {
     "GOOGLE_CLIENT_ID": os.getenv("GOOGLE_CLIENT_ID"),
     "GOOGLE_CLIENT_SECRET": os.getenv("GOOGLE_CLIENT_SECRET"),
-    "GOOGLE_REDIRECT_URI": "http://localhost:8000/auth/google/callback"
+    "GOOGLE_REDIRECT_URI": os.getenv("GOOGLE_REDIRECT_URI")
 }
 config = Config(environ=config_data)
+
 oauth = OAuth(config)
 oauth.register(
     name="google",
@@ -172,25 +177,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     return user
 
-# Google OAuth2 routes
+# === Google OAuth2 routes ===
 @app.get("/auth/google")
 async def login_via_google(request: Request):
+    """ Initiate Google OAuth login """
     redirect_uri = config_data["GOOGLE_REDIRECT_URI"]
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/auth/google/callback")
 async def google_callback(request: Request):
+    """ Handle Google OAuth callback """
     try:
         # Fetch the access token from Google
         token = await oauth.google.authorize_access_token(request)
         if not token:
+            logging.error("Failed to fetch access token")
             raise HTTPException(status_code=400, detail="Failed to fetch access token")
 
         # Log the token for debugging purposes
         logging.error(f"Token received: {token}")
 
         # Get user info directly from userinfo endpoint instead of parsing id_token
-        userinfo = token.get('userinfo')
+        userinfo = await oauth.google.parse_id_token(request, token)
         if not userinfo:
             # If userinfo is not directly available, fetch it using the access token
             resp = await oauth.google.get('https://openidconnect.googleapis.com/v1/userinfo', token=token)
@@ -204,6 +212,7 @@ async def google_callback(request: Request):
         name = userinfo.get("name")
 
         if not email:
+            logging.error("Email not found in user info")
             raise HTTPException(status_code=400, detail="Email not found in user info")
 
         # Check if the user already exists in the database
@@ -226,6 +235,7 @@ async def google_callback(request: Request):
         return RedirectResponse(url=frontend_url)
 
     except HTTPException as e:
+        logging.error(f"HTTPException: {e.detail}")
         raise e
     except Exception as e:
         logging.error(f"Error in google_callback: {str(e)}")
@@ -307,8 +317,8 @@ async def delete_story(story_id: str, current_user: User = Depends(get_current_u
     try:
         result = await stories_collection.delete_one({
             "_id": ObjectId(story_id),
-            "author_id": current_user["id"]
-        })
+            "author_id": current_user["id"]}
+        )
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Story not found or not authorized")
@@ -317,17 +327,18 @@ async def delete_story(story_id: str, current_user: User = Depends(get_current_u
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting story: {str(e)}")
 
-# Existing routes (unchanged)
+# User routes
 @app.post("/signup/", response_model=UserInDB)
 async def create_user(user: User):
     user_dict = user.dict()
-    # Generate unique doctor ID
-    user_dict["doctor_id"] = f"DOC{uuid.uuid4().hex[:6].upper()}"
     user_dict["password"] = get_password_hash(user_dict["password"])
+    logging.info(f"Creating user: {user_dict}")  # Log user creation
     if await users_collection.find_one({"email": user_dict["email"]}):
         raise HTTPException(status_code=400, detail="Email already registered")
     new_user = await users_collection.insert_one(user_dict)
+    logging.info(f"User created with ID: {new_user.inserted_id}")  # Log user creation result
     created_user = await users_collection.find_one({"_id": new_user.inserted_id})
+    logging.info(f"Created user: {created_user}")  # Log the created user
     return user_helper(created_user)
 
 @app.post("/login", response_model=Token)
@@ -346,9 +357,7 @@ async def get_current_user_data(current_user: User = Depends(get_current_user)):
     """Endpoint to get the current user's data."""
     return user_helper(current_user)
 
-
-
 # Run the application
-if _name_ == "_main_":
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
