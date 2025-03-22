@@ -1,7 +1,7 @@
 from groq import Groq
 import os
 from sentence_transformers import SentenceTransformer
-from database import collection_name2, client, stories_collection
+from database import collection_name2, client, stories_collection,users_collection
 import uuid
 import qdrant_client
 
@@ -13,7 +13,7 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # Load SentenceTransformer embedding model
 embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 
-def generate_new_story(id: str, genre: str, brutality: int, emotion: int, ending: str, suspense:int, humor:int, romance:int, intensity:int, mystery:int):
+def generate_new_story(id: str, genre: str, brutality: int, emotion: int, ending: str, suspense:int, humor:int, romance:int, intensity:int, mystery:int,status:str):
     """
     Generates the first part of a new story using Groq and stores it.
     """
@@ -56,8 +56,12 @@ A well-structured short story in a narrative format.
         conversation_history.append({"role": "assistant", "content": story_text})
         stories_collection.insert_one({
         "story_id": story_id,
-        "status": "incomplete"
+        "status": "Conflict (Rising Action)"
     })
+        update_result =  users_collection.update_one(
+            {"user_id": id, "story_id": story_id},  # Find the story
+            {"$set": {"status": status}}  # Update status field
+        )
         story_embedding = embedding_model.encode(story_text).tolist()
         client.upsert(
             collection_name=collection_name2,
@@ -71,35 +75,40 @@ A well-structured short story in a narrative format.
 
     
 
-def continue_existing_story(id: str, story_id: str,suspense:int, humor:int, romance:int, intensity:int, mystery:int):
+def continue_existing_story(id: str, story_id: str,suspense_boost:int, emotion_boost:int, brutality_boost:int, mystery_boost:int,status:str):
     """
     Generates the next part of an existing story using Groq and vector embeddings.
     """
-    search_result = qdrant_client.scroll(
+    
+    search_result = client.scroll(
         collection_name=collection_name2,
         scroll_filter={"must": [{"key": "story_id", "match": {"value": story_id}}]},
         limit=1,
     )
 
-    if not search_result or not search_result["points"]:
+    print(type(search_result))
+    print(search_result)
+    
+
+    records,_ = search_result
+    if not records:
         print("Story not found")
         return None
-
-    previous_plot = search_result["points"][0]["payload"]["plot"]
-
+    record = records[0]
+    previous_plot = record.payload["plot"]
     prompt = f"""## Role: AI Storyteller & Plot Continuation Expert  
     ## Objective: Generate the **next part** of an ongoing story while maintaining coherence and excitement.  
-      
+    ## Now the story is in{status} phase  
     ## **Story So Far:**  
     {previous_plot}  
       
     ## **User Preferences for Continuation:**  
-    - **Suspense Level:** {suspense}/10  
-    - **Humor Level:** {humor}/10  
-    - **Romance Level:** {romance}/10  
-    - **Intensity Level:** {intensity}/10  
-    - **Mystery Level:** {mystery}/10  
+    -- **Suspense Boost:** {suspense_boost}
+    -- **Emotion Boost:** {emotion_boost}   
+    -- **Brutality Boost:** {brutality_boost}
+    -- **Mystery Boost:** {mystery_boost}   
 
+    
     ## **Instructions for Story Progression:**  
     - The next part should **seamlessly connect** with the existing plot.  
     - Maintain **consistent character development** and world-building.  
@@ -110,22 +119,41 @@ def continue_existing_story(id: str, story_id: str,suspense:int, humor:int, roma
     - If intensity is high, increase action, stakes, or urgency.  
     - If mystery is high, introduce intriguing clues or unresolved questions.  
     """
+    conversation_history = [{"role": "system", "content": "You are a world-class AI storyteller."}]
+    conversation_history.append({"role": "user", "content": prompt})
 
     # Use Groq SDK to generate response
-    response = groq_client.chat.completions.create(
-        model=LLM_MODEL,
-        prompt=prompt
-    )
+    try:
+        chat_completion = groq_client.chat.completions.create(
+            messages=conversation_history,
+            model="llama-3.3-70b-versatile"
+        )
+        next_part = chat_completion.choices[0].message.content.strip()
 
-    next_part = response.choices[0].text.strip()
+        # Store updated embedding in Qdrant
+        updated_embedding = embedding_model.encode(previous_plot + " " + next_part).tolist()
 
-    # Store embedding in Qdrant
-    updated_embedding = embedding_model.encode(previous_plot + " " + next_part).tolist()
-    client.upsert(
-        collection_name=collection_name2,
-        points=[{
-            "id": story_id, "vector": updated_embedding, "payload": {"plot": next_part, "story_id": story_id, "user_id": id}
-        }]
-    )
+        # Update the story status
+        if status == "Conflict (Rising Action)":
+            status = "Climax (Turning Point)"
+        elif status == "Climax (Turning Point)":
+            status = "Falling Action (Resolution Building)"
+        else:
+            status = "Conclusion (Final Resolution)"
 
-    return {"story_id": story_id, "plot": next_part}
+        users_collection.update_one(
+            {"user_id": id, "story_id": story_id},
+            {"$set": {"status": status}}
+        )
+
+        client.upsert(
+            collection_name=collection_name2,
+            points=[{
+                "id": story_id, "vector": updated_embedding, "payload": {"plot": next_part, "story_id": story_id, "user_id": id}
+            }]
+        )
+
+        return {"story_id": story_id, "plot": next_part}
+
+    except Exception as e:
+        return {"error": f"Error generating story: {e}"}
