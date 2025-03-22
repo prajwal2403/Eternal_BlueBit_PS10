@@ -5,6 +5,7 @@ import HeroSection from './components/HeroSection';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import Generate from './components/Generate';
+import GoogleCallback from './components/GoogleCallback';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -18,6 +19,7 @@ function App() {
       <Routes>
         <Route path="/" element={<HeroSection />} />
         <Route path="/auth" element={<AuthPage onLogin={handleLogin} />} />
+        <Route path="/auth/google/callback" element={<GoogleCallback onLogin={handleLogin} />} />
         <Route
           path="/dashboard"
           element={isAuthenticated ? <Dashboard /> : <Navigate to="/auth" />}
