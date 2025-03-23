@@ -6,12 +6,13 @@ import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import Generate from './components/Generate';
 import GoogleCallback from './components/GoogleCallback';
-import AddStory from './components/AddStory';
+import AddStory from './components/AddStory';  // Ensure this is the ContinueStory component
 import Story from './components/Story';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProtectedRoute from './components/ProtectedRoute';
+import ContinueStory from './components/ContinueStory';
 
 const AppRoutes = () => {
   const handleLogin = () => {
@@ -52,6 +53,15 @@ const AppRoutes = () => {
         element={
           <ProtectedRoute>
             <Story />
+          </ProtectedRoute>
+        }
+      />
+      {/* ✅ Updated route for ContinueStory (no :id parameter) */}
+      <Route
+        path="/continue-story"
+        element={
+          <ProtectedRoute>
+            <ContinueStory />
           </ProtectedRoute>
         }
       />
