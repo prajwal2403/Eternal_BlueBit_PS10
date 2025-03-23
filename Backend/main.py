@@ -16,9 +16,9 @@ from starlette.middleware.sessions import SessionMiddleware
 import os
 import base64
 import uuid
-import yagmail 
 from retrive import generate_new_story, continue_existing_story
 from database import stories_collection, users_collection
+
 # Generate a secure secret key
 def generate_secret_key():
     return base64.urlsafe_b64encode(os.urandom(32)).decode()
@@ -29,13 +29,11 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5174", "http://localhost:5173"],
+    allow_origins=["http://localhost:5173"],  # Add your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-SENDER_EMAIL = "kotkarprasanna96@gmail.com"  # Replace with your Gmail
-SENDER_PASSWORD = "zoya pqwr tvgt wken"  # Use an App Password for security
 
 # Add SessionMiddleware
 app.add_middleware(
@@ -52,7 +50,6 @@ client = AsyncIOMotorClient(MONGO_DETAILS)
 database = client.story
 users_collection = database.get_collection("users")
 stories_collection = database.get_collection("stories")
- # Add this line
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -100,6 +97,7 @@ class UserInDB(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    user: UserInDB
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -118,16 +116,27 @@ class Story(BaseModel):
     is_published: bool = False
 
 class StoryCreate(BaseModel):
-    title: str
-    content: str
-    tags: List[str] = []
-    is_published: bool = False
+    genre: str
+    brutality: int
+    emotion: int
+    suspense: int
+    humor: int
+    romance: int
+    intensity: int
+    mystery: int
+    ending: str
 
-class StoryUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    tags: Optional[List[str]] = None
-    is_published: Optional[bool] = None
+class StoryResponse(BaseModel):
+    id: str
+    title: Optional[str] = "Untitled"
+    genre: str
+    status: str = "pending"
+    createdAt: datetime
+    updatedAt: datetime
+
+class StoryCreateResponse(BaseModel):
+    story_id: str
+    first_part: str
 
 # Helper functions
 def user_helper(user) -> dict:
@@ -258,12 +267,36 @@ async def create_new_story(
     try:
         user_data = await users_collection.find_one({"_id": ObjectId(user_id)})
 
-        status=user_data.get("status","Introduction(setting & characters)")
-        first_part, story_id = generate_new_story(user_id, genre, brutality, emotion, ending, suspense, humor, romance, intensity, mystery,status) 
+        status = user_data.get("status", "Introduction(setting & characters)")
+        first_part, story_id = generate_new_story(user_id, genre, brutality, emotion, ending, suspense, humor, romance, intensity, mystery, status) 
         if not first_part or not story_id:
             raise HTTPException(status_code=500, detail="Failed to generate story.")
         
-        add_story_to_user(user_id, story_id)
+        # Create a new story document
+        story_data = {
+            "user_id": user_id,
+            "genre": genre,
+            "brutality": brutality,
+            "emotion": emotion,
+            "suspense": suspense,
+            "humor": humor,
+            "romance": romance,
+            "intensity": intensity,
+            "mystery": mystery,
+            "ending": ending,
+            "first_part": first_part,
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "status": status
+        }
+        await stories_collection.insert_one(story_data)
+        
+        # Add the story ID to the user's document
+        await users_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$addToSet": {"stories": story_id}}
+        )
+        
         logging.info(f"New story created: {story_id} for user {user_id}")
         return {"story_id": story_id, "first_part": first_part}
     except Exception as e:
@@ -289,24 +322,30 @@ async def get_stories(current_user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching stories: {str(e)}")
 
-@app.get("/stories/{story_id}", response_model=Story)
+@app.get("/stories/{story_id}")
 async def get_story(story_id: str, current_user: User = Depends(get_current_user)):
-    """Get a specific story by ID."""
     try:
         story = await stories_collection.find_one({
-            "_id": ObjectId(story_id)
+            "_id": ObjectId(story_id),
+            "user_id": str(current_user["_id"])
         })
-        if story:
-            story["_id"] = str(story["_id"])
-            return story
-        raise HTTPException(status_code=404, detail="Story not found")
+        
+        if not story:
+            raise HTTPException(status_code=404, detail="Story not found")
+            
+        return {
+            "story_id": str(story["_id"]),
+            "first_part": story["first_part"],
+            "title": story.get("title", "Untitled"),
+            "created_at": story.get("created_at"),
+            "status": story.get("status", "completed")
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching story: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/continue-story/")
 async def continue_story(user_id: str,
     story_id: str,
-    
     suspense_boost: int = Query(5, ge=0, le=10),
     emotion_boost: int = Query(5, ge=0, le=10),
     brutality_boost: int = Query(5, ge=0, le=10),
@@ -315,12 +354,9 @@ async def continue_story(user_id: str,
     Continues an existing story by generating the next part.
     """
     try:
-        # Check if story exists
-        
-        
-        user_data=await users_collection.find_one({"_id": ObjectId(user_id)})
-        status=user_data.get("status")
-        next_part = continue_existing_story(user_id,story_id, suspense_boost, emotion_boost, brutality_boost, mystery_boost,status)
+        user_data = await users_collection.find_one({"_id": ObjectId(user_id)})
+        status = user_data.get("status")
+        next_part = continue_existing_story(user_id, story_id, suspense_boost, emotion_boost, brutality_boost, mystery_boost, status)
         if not next_part:
             raise HTTPException(status_code=500, detail="Failed to generate next part of the story.")
         
@@ -330,15 +366,14 @@ async def continue_story(user_id: str,
         logging.error(f"Error continuing story {story_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.delete("/stories/{story_id}")
 async def delete_story(story_id: str, current_user: User = Depends(get_current_user)):
     """Delete a story."""
     try:
         result = await stories_collection.delete_one({
             "_id": ObjectId(story_id),
-            "author_id": current_user["id"]}
-        )
+            "author_id": current_user["id"]
+        })
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Story not found or not authorized")
@@ -375,13 +410,13 @@ async def login(user: UserLogin):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
-    return {"access_token": access_token, "token_type": "bearer"}
+    user_info = user_helper(user_data)
+    return {"access_token": access_token, "token_type": "bearer", "user": user_info}
 
 @app.get("/user", response_model=UserInDB)
 async def get_current_user_data(current_user: User = Depends(get_current_user)):
     """Endpoint to get the current user's data."""
     return user_helper(current_user)
-
 
 def add_story_to_user(user_id: str, story_id: str):
     """
@@ -393,7 +428,66 @@ def add_story_to_user(user_id: str, story_id: str):
         upsert=True  # Create user if not exists
     )
 
+# Verify token endpoint
+@app.get("/auth/verify/")
+async def verify_token(current_user: User = Depends(get_current_user)):
+    try:
+        return {
+            "status": "valid",
+            "user": {
+                "id": str(current_user["_id"]),
+                "email": current_user["email"],
+                "name": current_user["name"]
+            }
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+
+# Get user's stories endpoint
+@app.get("/stories/user/", response_model=List[StoryResponse])
+async def get_user_stories(current_user: User = Depends(get_current_user)):
+    try:
+        stories = await stories_collection.find({"user_id": str(current_user["_id"])}).to_list(None)
+        return [
+            {
+                "id": str(story["_id"]),
+                "title": story.get("title", "Untitled"),
+                "genre": story["genre"],
+                "status": story.get("status", "pending"),
+                "createdAt": story.get("created_at", datetime.utcnow()),
+                "updatedAt": story.get("updated_at", datetime.utcnow())
+            } 
+            for story in stories
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Create new story endpoint
+@app.post("/stories/new/", response_model=StoryCreateResponse)
+async def create_story(
+    story: StoryCreate,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        story_data = story.dict()
+        story_data["user_id"] = str(current_user["_id"])
+        story_data["created_at"] = datetime.utcnow()
+        story_data["updated_at"] = datetime.utcnow()
+        story_data["status"] = "pending"
+        
+        result = await stories_collection.insert_one(story_data)
+        
+        return {
+            "story_id": str(result.inserted_id),
+            "first_part": "Story initialization successful"  # Replace with actual story generation
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Run the application
-if __name__ == "_main_":
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
