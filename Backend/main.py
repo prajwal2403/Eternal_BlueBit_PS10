@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List
+from typing import Optional, List, Dict
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
@@ -13,11 +13,12 @@ from starlette.config import Config
 from starlette.responses import RedirectResponse
 import logging
 from starlette.middleware.sessions import SessionMiddleware
+from pymongo.errors import PyMongoError
 import os
 import base64
 import uuid
-from retrive import generate_new_story, continue_existing_story
-from database import stories_collection, users_collection
+from retrive import generate_new_story, generate_story_options, generate_next_story_part
+from database import stories_collection, users_collection, client, collection_name, collection_name2
 
 # Generate a secure secret key
 def generate_secret_key():
@@ -25,6 +26,8 @@ def generate_secret_key():
 
 # Initialize FastAPI app
 app = FastAPI()
+user_story_options: Dict[str, List[str]] = {}
+
 
 # Add CORS middleware
 app.add_middleware(
@@ -46,8 +49,8 @@ app.add_middleware(
 MONGO_DETAILS = "mongodb+srv://prajwal2403:Mysql321@prajwal2403.s8a1j.mongodb.net/story?retryWrites=true&w=majority"
 
 # Initialize MongoDB client
-client = AsyncIOMotorClient(MONGO_DETAILS)
-database = client.story
+client2 = AsyncIOMotorClient(MONGO_DETAILS)
+database = client2.story
 users_collection = database.get_collection("users")
 stories_collection = database.get_collection("stories")
 
@@ -116,15 +119,18 @@ class Story(BaseModel):
     is_published: bool = False
 
 class StoryCreate(BaseModel):
+    user_id: str
     genre: str
-    brutality: int
-    emotion: int
-    suspense: int
-    humor: int
-    romance: int
-    intensity: int
-    mystery: int
+    initial_input: str
+    brutality: int = Field(ge=0, le=10)
+    emotion: int = Field(ge=0, le=10)
+    suspense: int = Field(ge=0, le=10)
+    humor: int = Field(ge=0, le=10)
+    romance: int = Field(ge=0, le=10)
+    intensity: int = Field(ge=0, le=10)
+    mystery: int = Field(ge=0, le=10)
     ending: str
+
 
 class StoryResponse(BaseModel):
     id: str
@@ -249,41 +255,36 @@ async def google_callback(request: Request):
 
 # Story routes
 @app.post("/new-story/")
-async def create_new_story(
-    user_id: str,
-    genre: str,
-    brutality: int = Query(5, ge=0, le=10),
-    emotion: int = Query(5, ge=0, le=10),
-    suspense: int = Query(5, ge=0, le=10),
-    humor: int = Query(5, ge=0, le=10),
-    romance: int = Query(5, ge=0, le=10),
-    intensity: int = Query(5, ge=0, le=10),
-    mystery: int = Query(5, ge=0, le=10),
-    ending: str = "open-ended"
-):
+async def create_new_story(story: StoryCreate):
     """
     Creates a new story with user-selected parameters and generates the first part.
     """
     try:
-        user_data = await users_collection.find_one({"_id": ObjectId(user_id)})
+        user_data = await users_collection.find_one({"_id": ObjectId(story.user_id)})
 
         status = user_data.get("status", "Introduction(setting & characters)")
-        first_part, story_id = generate_new_story(user_id, genre, brutality, emotion, ending, suspense, humor, romance, intensity, mystery, status) 
+        first_part, story_id = generate_new_story(
+            story.user_id, story.genre, story.initial_input, story.brutality, story.emotion, 
+            story.ending, story.suspense, story.humor, story.romance, story.intensity, 
+            story.mystery, status
+        ) 
         if not first_part or not story_id:
             raise HTTPException(status_code=500, detail="Failed to generate story.")
-        
         # Create a new story document
         story_data = {
-            "user_id": user_id,
-            "genre": genre,
-            "brutality": brutality,
-            "emotion": emotion,
-            "suspense": suspense,
-            "humor": humor,
-            "romance": romance,
-            "intensity": intensity,
-            "mystery": mystery,
-            "ending": ending,
+
+            "story_id": story_id,
+            "user_id": story.user_id,
+            "genre": story.genre,
+            "initial_input": story.initial_input,
+            "brutality": story.brutality,
+            "emotion": story.emotion,
+            "suspense": story.suspense,
+            "humor": story.humor,
+            "romance": story.romance,
+            "intensity": story.intensity,
+            "mystery": story.mystery,
+            "ending": story.ending,
             "first_part": first_part,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
@@ -293,11 +294,11 @@ async def create_new_story(
         
         # Add the story ID to the user's document
         await users_collection.update_one(
-            {"_id": ObjectId(user_id)},
+            {"_id": ObjectId(story.user_id)},
             {"$addToSet": {"stories": story_id}}
         )
         
-        logging.info(f"New story created: {story_id} for user {user_id}")
+        logging.info(f"New story created: {story_id} for user {story.user_id}")
         return {"story_id": story_id, "first_part": first_part}
     except Exception as e:
         logging.error(f"Error creating new story: {str(e)}")
@@ -307,21 +308,36 @@ async def create_new_story(
 async def get_stories(current_user: User = Depends(get_current_user)):
     """Get all stories for the current user."""
     try:
-        user = await users_collection.find_one({"_id": current_user["id"]})
+        # Fetch the user document
+        user = await users_collection.find_one({"_id": ObjectId(current_user["id"])})
         if not user or "stories" not in user:
             return []  # Return empty list if user has no stories
 
         # Fetch stories using the story_id list
         story_ids = user["stories"]
-        stories = await stories_collection.find({"story_id": {"$in": story_ids}}).to_list(len(story_ids))
+        if not story_ids:
+            return []  # Return empty list if no story IDs are found
 
+        # Convert story_ids to ObjectId (if they are not already)
+        try:
+            story_object_ids = [ObjectId(story_id) for story_id in story_ids]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid story ID format: {str(e)}")
+
+        # Fetch stories from the database
+        stories = await stories_collection.find({"_id": {"$in": story_object_ids}}).to_list(len(story_object_ids))
+
+        # Convert ObjectId to string for JSON serialization
         for story in stories:
             story["_id"] = str(story["_id"])
-        
+
         return stories
+    except PyMongoError as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching stories: {str(e)}")
-
+    
+    
 @app.get("/stories/{story_id}")
 async def get_story(story_id: str, current_user: User = Depends(get_current_user)):
     try:
@@ -343,28 +359,67 @@ async def get_story(story_id: str, current_user: User = Depends(get_current_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/get-story-options/")
+async def get_story_options(user_id: str, story_id: str):
+    """
+    Generates three possible story options and stores them in a global dictionary for the user.
+    """
+    global user_story_options
+
+    # Search for the story in the database
+    search_result = client.scroll(
+        collection_name=collection_name2,
+        scroll_filter={"must": [{"key": "story_id", "match": {"value": story_id}}]},
+        limit=1,
+    )
+
+    records, _ = search_result
+    if not records:
+        print("Story not found")
+        # Return a valid response with empty options
+        return {"user_id": user_id, "story_id": story_id, "options": []}
+
+    record = records[0]
+    previous_plot = record.payload["plot"]
+    story_options = generate_story_options(previous_plot)  # Generate options
+
+    # Store options for this user
+    user_story_options[user_id] = story_options
+
+    return {"user_id": user_id, "story_id": story_id, "options": story_options}
+
+
 @app.post("/continue-story/")
-async def continue_story(user_id: str,
-    story_id: str,
-    suspense_boost: int = Query(5, ge=0, le=10),
-    emotion_boost: int = Query(5, ge=0, le=10),
-    brutality_boost: int = Query(5, ge=0, le=10),
-    mystery_boost: int = Query(5, ge=0, le=10)):
-    """
-    Continues an existing story by generating the next part.
-    """
-    try:
-        user_data = await users_collection.find_one({"_id": ObjectId(user_id)})
-        status = user_data.get("status")
-        next_part = continue_existing_story(user_id, story_id, suspense_boost, emotion_boost, brutality_boost, mystery_boost, status)
-        if not next_part:
-            raise HTTPException(status_code=500, detail="Failed to generate next part of the story.")
+async def continue_story(user_id: str, story_id: str, choice: int = Query(1, ge=1, le=3)):
+        """
+        Continues the story based on the user's choice from their stored options.
+        """
+        global user_story_options
+
+        if user_id not in user_story_options:
+            return {"error": "No story options available for this user. Call /get-story-options first."}
+
+        # Get the user's chosen option
+        story_options = user_story_options[user_id]
+        selected_option = story_options[choice - 1]  # Convert choice (1,2,3) to index (0,1,2)
+        search_result = client.scroll(
+            collection_name=collection_name2,
+            scroll_filter={"must": [{"key": "story_id", "match": {"value": story_id}}]},
+            limit=1,
+        )
         
-        logging.info(f"Story {story_id} continued for user {user_id}")
-        return {"next_part": next_part}
-    except Exception as e:
-        logging.error(f"Error continuing story {story_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        records, _ = search_result
+        if not records:
+            print("Story not found")
+            return None
+        
+        record = records[0]
+        previous_plot = record.payload["plot"]
+        # Generate the next part of the story
+        next_part = generate_next_story_part(previous_plot, selected_option)
+
+        return {"user_id": user_id, "story_id": story_id, "chosen_option": selected_option, "plot": next_part}
 
 @app.delete("/stories/{story_id}")
 async def delete_story(story_id: str, current_user: User = Depends(get_current_user)):
@@ -447,24 +502,30 @@ async def verify_token(current_user: User = Depends(get_current_user)):
         )
 
 # Get user's stories endpoint
-@app.get("/stories/user/", response_model=List[StoryResponse])
-async def get_user_stories(current_user: User = Depends(get_current_user)):
+@app.get("/stories/user/{user_id}", response_model=List[StoryResponse])
+async def get_user_stories(user_id: str):
     try:
-        stories = await stories_collection.find({"user_id": str(current_user["_id"])}).to_list(None)
-        return [
+        # Fetch stories directly from the stories_collection using the user_id
+        stories = await stories_collection.find({"user_id": user_id}).to_list(None)
+        
+        # Prepare the response
+        response = [
             {
-                "id": str(story["_id"]),
+                "id": str(story["story_id"]),
                 "title": story.get("title", "Untitled"),
                 "genre": story["genre"],
                 "status": story.get("status", "pending"),
                 "createdAt": story.get("created_at", datetime.utcnow()),
                 "updatedAt": story.get("updated_at", datetime.utcnow())
-            } 
+            }
             for story in stories
         ]
+
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
+    
 # Create new story endpoint
 @app.post("/stories/new/", response_model=StoryCreateResponse)
 async def create_story(

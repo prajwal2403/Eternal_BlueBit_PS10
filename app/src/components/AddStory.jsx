@@ -9,6 +9,7 @@ const AddStory = () => {
     const [user, setUser] = useState(null);
     const [storyPreferences, setStoryPreferences] = useState({
         genre: '',
+        initial_input: '', // New parameter for initial input
         brutality: 5,
         emotion: 5,
         suspense: 5,
@@ -68,13 +69,14 @@ const AddStory = () => {
             const requestBody = {
                 user_id: userData.id,
                 genre: storyPreferences.genre.toLowerCase(),
-                brutality: Math.max(1, Math.min(10, parseInt(storyPreferences.brutality) || 5)),
-                emotion: Math.max(1, Math.min(10, parseInt(storyPreferences.emotion) || 5)),
-                suspense: Math.max(1, Math.min(10, parseInt(storyPreferences.suspense) || 5)),
-                humor: Math.max(1, Math.min(10, parseInt(storyPreferences.humor) || 5)),
-                romance: Math.max(1, Math.min(10, parseInt(storyPreferences.romance) || 5)),
-                intensity: Math.max(1, Math.min(10, parseInt(storyPreferences.intensity) || 5)),
-                mystery: Math.max(1, Math.min(10, parseInt(storyPreferences.mystery) || 5)),
+                initial_input: storyPreferences.initial_input, // Include initial input
+                brutality: storyPreferences.brutality,
+                emotion: storyPreferences.emotion,
+                suspense: storyPreferences.suspense,
+                humor: storyPreferences.humor,
+                romance: storyPreferences.romance,
+                intensity: storyPreferences.intensity,
+                mystery: storyPreferences.mystery,
                 ending: storyPreferences.ending.toLowerCase()
             };
 
@@ -93,7 +95,7 @@ const AddStory = () => {
 
             if (!response.ok) {
                 if (response.status === 422) {
-                    const errorMessage = data.detail?.[0]?.msg || 'Invalid input data';
+                    const errorMessage = data.detail || 'Invalid input data';
                     toast.error(errorMessage);
                 } else if (response.status === 401) {
                     toast.error('Session expired. Please login again.');
@@ -223,6 +225,21 @@ const AddStory = () => {
                                         ))}
                                     </select>
                                 </motion.div>
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 1 }}
+                                >
+                                    <label className="block text-gray-400 mb-2">Initial Input</label>
+                                    <textarea
+                                        value={storyPreferences.initial_input}
+                                        onChange={(e) => setStoryPreferences({ ...storyPreferences, initial_input: e.target.value })}
+                                        className="w-full px-4 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-green-500 transition-colors"
+                                        rows="4"
+                                        placeholder="Enter the initial input for the story..."
+                                        required
+                                    />
+                                </motion.div>
                                 <motion.button
                                     type="submit"
                                     disabled={loading}
@@ -233,7 +250,7 @@ const AddStory = () => {
                                     whileTap={{ scale: 0.98 }}
                                     initial={{ opacity: 0 }}
                                     animate={{ opacity: 1 }}
-                                    transition={{ delay: 1 }}
+                                    transition={{ delay: 1.1 }}
                                 >
                                     {loading ? 'Creating Story...' : 'Create Story'}
                                 </motion.button>
