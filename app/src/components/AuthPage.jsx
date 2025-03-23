@@ -98,6 +98,14 @@ const AuthPage = ({ onLogin }) => {
                         password: formData.password
                     });
 
+                    // Store user info in localStorage
+                    localStorage.setItem('token', response.data.access_token);
+                    localStorage.setItem('user', JSON.stringify({
+                        id: response.data.user.id,
+                        name: response.data.user.name,
+                        email: response.data.user.email
+                    }));
+
                     setShowSuccess(true);
                     onLogin();
 
