@@ -17,13 +17,8 @@ import os
 import base64
 import uuid
 import yagmail 
-from dotenv import load_dotenv
-import os
-from fastapi.responses import JSONResponse
-
-# Load environment variables
-load_dotenv()
-
+from retrive import generate_new_story, continue_existing_story
+from database import stories_collection, users_collection
 # Generate a secure secret key
 def generate_secret_key():
     return base64.urlsafe_b64encode(os.urandom(32)).decode()
@@ -57,6 +52,7 @@ client = AsyncIOMotorClient(MONGO_DETAILS)
 database = client.story
 users_collection = database.get_collection("users")
 stories_collection = database.get_collection("stories")
+ # Add this line
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -243,31 +239,52 @@ async def google_callback(request: Request):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 # Story routes
-@app.post("/stories/", response_model=Story)
-async def create_story(story: StoryCreate, current_user: User = Depends(get_current_user)):
-    """Create a new story."""
+@app.post("/new-story/")
+async def create_new_story(
+    user_id: str,
+    genre: str,
+    brutality: int = Query(5, ge=0, le=10),
+    emotion: int = Query(5, ge=0, le=10),
+    suspense: int = Query(5, ge=0, le=10),
+    humor: int = Query(5, ge=0, le=10),
+    romance: int = Query(5, ge=0, le=10),
+    intensity: int = Query(5, ge=0, le=10),
+    mystery: int = Query(5, ge=0, le=10),
+    ending: str = "open-ended"
+):
+    """
+    Creates a new story with user-selected parameters and generates the first part.
+    """
     try:
-        story_dict = story.dict()
-        story_dict["author_id"] = current_user["id"]
-        story_dict["created_at"] = datetime.utcnow()
-        result = await stories_collection.insert_one(story_dict)
+        user_data = await users_collection.find_one({"_id": ObjectId(user_id)})
+
+        status=user_data.get("status","Introduction(setting & characters)")
+        first_part, story_id = generate_new_story(user_id, genre, brutality, emotion, ending, suspense, humor, romance, intensity, mystery,status) 
+        if not first_part or not story_id:
+            raise HTTPException(status_code=500, detail="Failed to generate story.")
         
-        created_story = await stories_collection.find_one({"_id": result.inserted_id})
-        created_story["_id"] = str(created_story["_id"])
-        return created_story
+        add_story_to_user(user_id, story_id)
+        logging.info(f"New story created: {story_id} for user {user_id}")
+        return {"story_id": story_id, "first_part": first_part}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating story: {str(e)}")
+        logging.error(f"Error creating new story: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stories/", response_model=List[Story])
 async def get_stories(current_user: User = Depends(get_current_user)):
     """Get all stories for the current user."""
     try:
-        stories = await stories_collection.find(
-            {"author_id": current_user["id"]}
-        ).to_list(1000)
-        
+        user = await users_collection.find_one({"_id": current_user["id"]})
+        if not user or "stories" not in user:
+            return []  # Return empty list if user has no stories
+
+        # Fetch stories using the story_id list
+        story_ids = user["stories"]
+        stories = await stories_collection.find({"story_id": {"$in": story_ids}}).to_list(len(story_ids))
+
         for story in stories:
             story["_id"] = str(story["_id"])
+        
         return stories
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching stories: {str(e)}")
@@ -277,8 +294,7 @@ async def get_story(story_id: str, current_user: User = Depends(get_current_user
     """Get a specific story by ID."""
     try:
         story = await stories_collection.find_one({
-            "_id": ObjectId(story_id),
-            "author_id": current_user["id"]
+            "_id": ObjectId(story_id)
         })
         if story:
             story["_id"] = str(story["_id"])
@@ -287,30 +303,33 @@ async def get_story(story_id: str, current_user: User = Depends(get_current_user
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching story: {str(e)}")
 
-@app.put("/stories/{story_id}", response_model=Story)
-async def update_story(
-    story_id: str, 
-    story_update: StoryUpdate, 
-    current_user: User = Depends(get_current_user)
-):
-    """Update a story."""
+@app.post("/continue-story/")
+async def continue_story(user_id: str,
+    story_id: str,
+    
+    suspense_boost: int = Query(5, ge=0, le=10),
+    emotion_boost: int = Query(5, ge=0, le=10),
+    brutality_boost: int = Query(5, ge=0, le=10),
+    mystery_boost: int = Query(5, ge=0, le=10)):
+    """
+    Continues an existing story by generating the next part.
+    """
     try:
-        update_data = {k: v for k, v in story_update.dict().items() if v is not None}
-        update_data["updated_at"] = datetime.utcnow()
+        # Check if story exists
         
-        result = await stories_collection.update_one(
-            {"_id": ObjectId(story_id), "author_id": current_user["id"]},
-            {"$set": update_data}
-        )
         
-        if result.modified_count == 0:
-            raise HTTPException(status_code=404, detail="Story not found or not authorized")
-            
-        updated_story = await stories_collection.find_one({"_id": ObjectId(story_id)})
-        updated_story["_id"] = str(updated_story["_id"])
-        return updated_story
+        user_data=await users_collection.find_one({"_id": ObjectId(user_id)})
+        status=user_data.get("status")
+        next_part = continue_existing_story(user_id,story_id, suspense_boost, emotion_boost, brutality_boost, mystery_boost,status)
+        if not next_part:
+            raise HTTPException(status_code=500, detail="Failed to generate next part of the story.")
+        
+        logging.info(f"Story {story_id} continued for user {user_id}")
+        return {"next_part": next_part}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating story: {str(e)}")
+        logging.error(f"Error continuing story {story_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/stories/{story_id}")
 async def delete_story(story_id: str, current_user: User = Depends(get_current_user)):
@@ -332,6 +351,8 @@ async def delete_story(story_id: str, current_user: User = Depends(get_current_u
 @app.post("/signup/", response_model=UserInDB)
 async def create_user(user: User):
     user_dict = user.dict()
+    # Generate unique doctor ID
+    user_dict["_id"] = f"DOC{uuid.uuid4().hex[:6].upper()}"
     user_dict["password"] = get_password_hash(user_dict["password"])
     logging.info(f"Creating user: {user_dict}")  # Log user creation
     if await users_collection.find_one({"email": user_dict["email"]}):
@@ -358,26 +379,18 @@ async def get_current_user_data(current_user: User = Depends(get_current_user)):
     """Endpoint to get the current user's data."""
     return user_helper(current_user)
 
-@app.post("/logout")
-async def logout(request: Request, response: JSONResponse):
-    """Endpoint to handle user logout"""
-    try:
-        # Clear session data
-        request.session.clear()
-        
-        # Create response
-        response = JSONResponse(content={"message": "Successfully logged out"})
-        
-        # Clear any session cookies
-        response.delete_cookie("session")
-        response.delete_cookie("Authorization")
-        
-        return response
-    except Exception as e:
-        logging.error(f"Error during logout: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error during logout")
+
+def add_story_to_user(user_id: str, story_id: str):
+    """
+    Adds the generated story_id to the user's document.
+    """
+    users_collection.update_one(
+        {"_id": user_id},
+        {"$addToSet": {"stories": story_id}},  # Add story_id without duplication
+        upsert=True  # Create user if not exists
+    )
 
 # Run the application
-if __name__ == "__main__":
+if __name__ == "_main_":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
