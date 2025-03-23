@@ -352,7 +352,7 @@ async def delete_story(story_id: str, current_user: User = Depends(get_current_u
 async def create_user(user: User):
     user_dict = user.dict()
     # Generate unique doctor ID
-    user_dict["_id"] = f"DOC{uuid.uuid4().hex[:6].upper()}"
+    # user_dict["_id"] = f"DOC{uuid.uuid4().hex[:6].upper()}"
     user_dict["password"] = get_password_hash(user_dict["password"])
     logging.info(f"Creating user: {user_dict}")  # Log user creation
     if await users_collection.find_one({"email": user_dict["email"]}):
@@ -360,8 +360,11 @@ async def create_user(user: User):
     new_user = await users_collection.insert_one(user_dict)
     logging.info(f"User created with ID: {new_user.inserted_id}")  # Log user creation result
     created_user = await users_collection.find_one({"_id": new_user.inserted_id})
-    logging.info(f"Created user: {created_user}")  # Log the created user
-    return user_helper(created_user)
+    if created_user:
+        created_user["_id"] = str(created_user["_id"])  # Convert ObjectId to string
+        logging.info(f"Created user: {created_user}")  # Log the created user
+        return user_helper(created_user)
+    raise HTTPException(status_code=500, detail="User creation failed")
 
 @app.post("/login", response_model=Token)
 async def login(user: UserLogin):
