@@ -6,6 +6,7 @@ import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
 import Generate from './components/Generate';
 import GoogleCallback from './components/GoogleCallback';
+import AddStory from './components/AddStory';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -27,6 +28,10 @@ function App() {
         <Route
           path="/generate"
           element={isAuthenticated ? <Generate /> : <Navigate to="/auth" />}
+        />
+        <Route
+          path="/add-story"
+          element={isAuthenticated ? <AddStory /> : <Navigate to="/auth" />}
         />
       </Routes>
     </Router>

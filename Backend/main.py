@@ -19,6 +19,7 @@ import uuid
 import yagmail 
 from dotenv import load_dotenv
 import os
+from fastapi.responses import JSONResponse
 
 # Load environment variables
 load_dotenv()
@@ -356,6 +357,25 @@ async def login(user: UserLogin):
 async def get_current_user_data(current_user: User = Depends(get_current_user)):
     """Endpoint to get the current user's data."""
     return user_helper(current_user)
+
+@app.post("/logout")
+async def logout(request: Request, response: JSONResponse):
+    """Endpoint to handle user logout"""
+    try:
+        # Clear session data
+        request.session.clear()
+        
+        # Create response
+        response = JSONResponse(content={"message": "Successfully logged out"})
+        
+        # Clear any session cookies
+        response.delete_cookie("session")
+        response.delete_cookie("Authorization")
+        
+        return response
+    except Exception as e:
+        logging.error(f"Error during logout: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error during logout")
 
 # Run the application
 if __name__ == "__main__":
