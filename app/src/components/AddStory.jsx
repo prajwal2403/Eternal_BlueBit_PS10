@@ -9,7 +9,7 @@ const AddStory = () => {
     const [user, setUser] = useState(null);
     const [storyPreferences, setStoryPreferences] = useState({
         genre: '',
-        initial_input: '', // New parameter for initial input
+        initial_input: '',
         brutality: 5,
         emotion: 5,
         suspense: 5,
@@ -17,7 +17,8 @@ const AddStory = () => {
         romance: 5,
         intensity: 5,
         mystery: 5,
-        ending: ''
+        ending: '',
+        style: '' // New field for style
     });
     const [loading, setLoading] = useState(false);
     const [storyContent, setStoryContent] = useState(null);
@@ -47,12 +48,22 @@ const AddStory = () => {
         setLoading(true);
         setStoryContent(null);
 
-        if (!storyPreferences.genre) {
+        if (!storyPreferences.genre.trim()) {
             toast.error('Please select a genre');
             setLoading(false);
             return;
         }
-        if (!storyPreferences.ending) {
+        if (!storyPreferences.initial_input.trim()) {
+            toast.error('Please provide an initial input');
+            setLoading(false);
+            return;
+        }
+        if (!storyPreferences.style.trim()) {
+            toast.error('Please select a style');
+            setLoading(false);
+            return;
+        }
+        if (!storyPreferences.ending.trim()) {
             toast.error('Please select an ending');
             setLoading(false);
             return;
@@ -62,14 +73,16 @@ const AddStory = () => {
             const userData = JSON.parse(localStorage.getItem('user'));
             if (!userData?.id) {
                 toast.error('User session expired. Please login again.');
-                navigate('/auth');
+                navigate('/dashboard');
                 return;
             }
 
-            const requestBody = {
+            // Create URL with query parameters
+            const url = new URL("http://localhost:8000/new-story/");
+            const params = {
                 user_id: userData.id,
                 genre: storyPreferences.genre.toLowerCase(),
-                initial_input: storyPreferences.initial_input, // Include initial input
+                initial_input: storyPreferences.initial_input.trim(),
                 brutality: storyPreferences.brutality,
                 emotion: storyPreferences.emotion,
                 suspense: storyPreferences.suspense,
@@ -77,56 +90,61 @@ const AddStory = () => {
                 romance: storyPreferences.romance,
                 intensity: storyPreferences.intensity,
                 mystery: storyPreferences.mystery,
-                ending: storyPreferences.ending.toLowerCase()
+                style: storyPreferences.style.toLowerCase(),
+                ending: storyPreferences.ending.toLowerCase(),
             };
 
-            console.log('Sending request with body:', requestBody);
+            // Add params to URL
+            Object.keys(params).forEach(key =>
+                url.searchParams.append(key, params[key])
+            );
 
-            const response = await fetch('http://localhost:8000/new-story/', {
-                method: 'POST',
+            const response = await fetch(url.toString(), {
+                method: "POST",
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    "Authorization": `Bearer ${localStorage.getItem('token')}`,
+                    "Content-Type": "application/json",
                 },
-                body: JSON.stringify(requestBody)
+                // No body needed since we're using query params
             });
 
             const data = await response.json();
 
             if (!response.ok) {
                 if (response.status === 422) {
-                    const errorMessage = data.detail || 'Invalid input data';
-                    toast.error(errorMessage);
+                    console.error("Validation errors:", data.detail);
+                    const errorMessage = data.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join(", ");
+                    toast.error(`Validation Error: ${errorMessage}`);
                 } else if (response.status === 401) {
-                    toast.error('Session expired. Please login again.');
-                    navigate('/auth');
+                    toast.error("Session expired. Please login again.");
+                    navigate("/auth");
                 } else {
-                    toast.error(data.detail || 'Failed to create story');
+                    toast.error(data.detail || "Failed to create story");
                 }
-                console.error('Failed to create story:', data);
+                console.error("Failed to create story:", data);
                 return;
             }
 
             setStoryContent(data.first_part);
-            window.dispatchEvent(new CustomEvent('storyUpdated'));
-            toast.success('Story created successfully!');
-
+            toast.success(`Story "${data.story_title}" created successfully!`);
             setTimeout(() => {
                 navigate(`/story/${data.story_id}`, {
                     state: {
                         first_part: data.first_part,
-                        story_id: data.story_id
-                    }
+                        story_id: data.story_id,
+                        story_title: data.story_title,
+                        status: data.status,
+                    },
                 });
             }, 1500);
-
         } catch (error) {
-            console.error('Error:', error);
-            toast.error('An error occurred while creating the story');
+            console.error("Error:", error);
+            toast.error("An error occurred while creating the story");
         } finally {
             setLoading(false);
         }
     };
+
 
     return (
         <DashboardLayout user={user}>
@@ -180,6 +198,24 @@ const AddStory = () => {
                                         <option value="">Select Genre</option>
                                         {['Fantasy', 'Adventure', 'Mystery', 'Educational', 'Fairy Tale'].map(genre => (
                                             <option key={genre} value={genre}>{genre}</option>
+                                        ))}
+                                    </select>
+                                </motion.div>
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.2 }}
+                                >
+                                    <label className="block text-gray-400 mb-2">Style</label>
+                                    <select
+                                        value={storyPreferences.style}
+                                        onChange={(e) => setStoryPreferences({ ...storyPreferences, style: e.target.value })}
+                                        className="w-full px-4 py-2 bg-gray-800/50 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-green-500 transition-colors"
+                                        required
+                                    >
+                                        <option value="">Select Style</option>
+                                        {['Shakespearen', 'Cyberpunk', 'Dystopian', 'Mytholical And Folklore', 'Psycological Thriller'].map(style => (
+                                            <option key={style} value={style}>{style}</option>
                                         ))}
                                     </select>
                                 </motion.div>

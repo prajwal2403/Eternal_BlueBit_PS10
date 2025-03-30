@@ -147,24 +147,13 @@ const Home = () => {
                                 transition={{ duration: 0.8, delay: 0.3 }}
                             >
                                 <div className="relative">
-                                    {/* Glow effect */}
-                                    <div className="absolute -inset-4 bg-gradient-to-r from-green-400 to-red-500 rounded-xl blur-lg opacity-30 animate-pulse"></div>
-
-                                    {/* Image container with border */}
-                                    <div className="relative z-10 rounded-xl overflow-hidden border-2 border-green-400 p-1">
+                                    {/* Image container */}
+                                    <div className="relative z-10 rounded-xl overflow-hidden">
                                         <img
                                             src={heroImage}
                                             alt="Hero"
                                             className="w-full h-auto rounded-lg transform hover:scale-105 transition-transform duration-500"
                                         />
-
-                                        {/* Image label */}
-                                        <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 p-3">
-                                            <div className="flex justify-between items-center">
-
-                                                <span className="px-2 py-1 bg-green-500 text-black text-xs rounded-full">AI Generated</span>
-                                            </div>
-                                        </div>
                                     </div>
                                 </div>
                             </motion.div>
